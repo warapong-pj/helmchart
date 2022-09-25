@@ -1386,7 +1386,7 @@ server:
     # -- Extensions to be loaded into the server
     contents:
     - name: argo-rollouts
-      url: https://github.com/argoproj-labs/rollout-extension/releases/download/v0.2.0/extension.tar
+      url: https://github.com/argoproj-labs/rollout-extension/releases/download/v0.2.1/extension.tar
 
   pdb:
     # -- Labels to be added to server pdb
