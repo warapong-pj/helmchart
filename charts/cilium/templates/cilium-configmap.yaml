@@ -6,14 +6,14 @@
 {{- $defaultBpfClockProbe := "false" -}}
 {{- $defaultBpfTProxy := "false" -}}
 {{- $defaultIPAM := "cluster-pool" -}}
-{{- $defaultSessionAffinity := "false" -}}
 {{- $defaultOperatorApiServeAddr := "localhost:9234" -}}
 {{- $defaultBpfCtTcpMax := 524288 -}}
 {{- $defaultBpfCtAnyMax := 262144 -}}
 {{- $enableIdentityMark := "true" -}}
 {{- $fragmentTracking := "true" -}}
 {{- $crdWaitTimeout := "5m" -}}
-{{- $defaultKubeProxyReplacement := "probe" -}}
+{{- $defaultKubeProxyReplacement := "disabled" -}}
+{{- $azureUsePrimaryAddress := "true" -}}
 
 {{- /* Default values when 1.8 was initially deployed */ -}}
 {{- if semverCompare ">=1.8" (default "1.8" .Values.upgradeCompatibility) -}}
@@ -22,7 +22,6 @@
   {{- $defaultBpfMasquerade = "true" -}}
   {{- $defaultBpfClockProbe = "true" -}}
   {{- $defaultIPAM = "cluster-pool" -}}
-  {{- $defaultSessionAffinity = "true" -}}
   {{- if .Values.ipv4.enabled }}
     {{- $defaultOperatorApiServeAddr = "127.0.0.1:9234" -}}
   {{- else -}}
@@ -30,19 +29,34 @@
   {{- end }}
   {{- $defaultBpfCtTcpMax = 0 -}}
   {{- $defaultBpfCtAnyMax = 0 -}}
+  {{- $defaultKubeProxyReplacement = "probe" -}}
+{{- end -}}
+
+{{- /* Default values when 1.9 was initially deployed */ -}}
+{{- if semverCompare ">=1.9" (default "1.9" .Values.upgradeCompatibility) -}}
+  {{- $defaultKubeProxyReplacement = "probe" -}}
 {{- end -}}
 
 {{- /* Default values when 1.10 was initially deployed */ -}}
 {{- if semverCompare ">=1.10" (default "1.10" .Values.upgradeCompatibility) -}}
-  {{- $defaultKubeProxyReplacement = "disabled" -}}
   {{- /* Needs to be explicitly disabled because it was enabled on all versions >=v1.8 above. */ -}}
   {{- $defaultBpfMasquerade = "false" -}}
+{{- end -}}
+
+{{- /* Default values when 1.12 was initially deployed */ -}}
+{{- if semverCompare ">=1.12" (default "1.12" .Values.upgradeCompatibility) -}}
+  {{- if .Values.azure.enabled }}
+      {{- $azureUsePrimaryAddress = "false" -}}
+  {{- end }}
+  {{- $defaultKubeProxyReplacement = "disabled" -}}
 {{- end -}}
 
 {{- $ipam := (coalesce .Values.ipam.mode $defaultIPAM) -}}
 {{- $bpfCtTcpMax := (coalesce .Values.bpf.ctTcpMax $defaultBpfCtTcpMax) -}}
 {{- $bpfCtAnyMax := (coalesce .Values.bpf.ctAnyMax $defaultBpfCtAnyMax) -}}
 {{- $kubeProxyReplacement := (coalesce .Values.kubeProxyReplacement $defaultKubeProxyReplacement) -}}
+{{- $azureUsePrimaryAddress = (coalesce .Values.azure.usePrimaryAddress $azureUsePrimaryAddress) -}}
+{{- $socketLB := (coalesce .Values.socketLB .Values.hostServices) -}}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -109,6 +123,10 @@ data:
   cilium-endpoint-gc-interval: "{{ .Values.operator.endpointGCInterval }}"
 {{- end }}
 
+{{- if hasKey .Values.operator "nodeGCInterval" }}
+  nodes-gc-interval: "{{ .Values.operator.nodeGCInterval | default "0s" }}"
+{{- end }}
+
 {{- if hasKey .Values "disableEndpointCRD" }}
   # Disable the usage of CiliumEndpoint CRD
   disable-endpoint-crd: "{{ .Values.disableEndpointCRD }}"
@@ -135,7 +153,7 @@ data:
   debug-verbose: "{{ .Values.debug.verbose }}"
 {{- end }}
 
-{{- if ne (int .Values.healthPort) 9876 }}
+{{- if ne (int .Values.healthPort) 9879 }}
   # Set the TCP port for the agent health status API. This is not the port used
   # for cilium-health.
   agent-health-port: "{{ .Values.healthPort }}"
@@ -161,7 +179,7 @@ data:
   # NOTE that this will open the port on ALL nodes where Cilium pods are
   # scheduled.
   prometheus-serve-addr: ":{{ .Values.prometheus.port }}"
-  # Port to expose Envoy metrics (e.g. "9095"). Envoy metrics listener will be disabled if this
+  # Port to expose Envoy metrics (e.g. "9964"). Envoy metrics listener will be disabled if this
   # field is not set.
   {{- if .Values.proxy.prometheus.enabled }}
   proxy-prometheus-port: "{{ .Values.proxy.prometheus.port }}"
@@ -187,6 +205,15 @@ data:
 
 {{- if .Values.operator.skipCRDCreation }}
   skip-crd-creation: "true"
+{{- end }}
+
+{{- if .Values.ingressController.enabled }}
+  enable-ingress-controller: "true"
+  enable-envoy-config: "true"
+  enforce-ingress-https: {{ .Values.ingressController.enforceHttps | quote }}
+  enable-ingress-secrets-sync: {{ .Values.ingressController.secretsNamespace.sync | quote }}
+  ingress-secrets-namespace: {{ .Values.ingressController.secretsNamespace.name | quote }}
+  ingress-lb-annotation-prefixes: {{ .Values.ingressController.ingressLBAnnotationPrefixes | join " " | quote }}
 {{- end }}
 
   # Enable IPv4 addressing. If enabled, all endpoints are allocated an IPv4
@@ -264,7 +291,10 @@ data:
   bpf-map-dynamic-size-ratio: {{ $defaultBpfMapDynamicSizeRatio | quote }}
 {{- end }}
 
-{{- if hasKey .Values.bpf "hostRouting" }}
+{{- if hasKey .Values.bpf "hostLegacyRouting" }}
+  enable-host-legacy-routing: {{ .Values.bpf.hostLegacyRouting | quote }}
+{{- else if hasKey .Values.bpf "hostRouting" }}
+  # DEPRECATED: this block should be removed in 1.13
   enable-host-legacy-routing: {{ .Values.bpf.hostRouting | quote }}
 {{- end }}
 
@@ -356,8 +386,10 @@ data:
   tunnel: "disabled"
   enable-endpoint-routes: "true"
   enable-local-node-route: "false"
+{{- else if .Values.aksbyocni.enabled }}
+  tunnel: "vxlan"
 {{- else }}
-  tunnel: {{ .Values.tunnel }}
+  tunnel: {{ .Values.tunnel | quote }}
 {{- end }}
 
 {{- if hasKey .Values "tunnelPort" }}
@@ -373,10 +405,14 @@ data:
 {{- if .Values.eni.awsReleaseExcessIPs }}
   aws-release-excess-ips: "true"
 {{- end }}
+{{- if .Values.eni.awsEnablePrefixDelegation }}
+  aws-enable-prefix-delegation: "true"
+{{- end }}
   ec2-api-endpoint: {{ .Values.eni.ec2APIEndpoint | quote }}
   eni-tags: {{ .Values.eni.eniTags | toRawJson | quote }}
   subnet-ids-filter: {{ .Values.eni.subnetIDsFilter | quote }}
   subnet-tags-filter: {{ .Values.eni.subnetTagsFilter | quote }}
+  instance-tags-filter: {{ .Values.eni.instanceTagsFilter | quote }}
 {{- end }}
 
 {{- if .Values.azure.enabled }}
@@ -386,6 +422,7 @@ data:
 {{- if .Values.azure.userAssignedIdentityID }}
   azure-user-assigned-identity-id: {{ .Values.azure.userAssignedIdentityID | quote }}
 {{- end }}
+  azure-use-primary-address: {{ $azureUsePrimaryAddress | quote }}
 {{- end }}
 
 {{- if .Values.alibabacloud.enabled }}
@@ -405,6 +442,7 @@ data:
   #  - none
   #  - aws-cni
   #  - flannel
+  #  - generic-veth
   #  - portmap (Enables HostPort support for Cilium)
   cni-chaining-mode: {{ .Values.cni.chainingMode }}
 
@@ -462,13 +500,6 @@ data:
   {{- end }}
 {{- end }}
 
-{{- if hasKey .Values "datapathMode" }}
-{{- if eq .Values.datapathMode "ipvlan" }}
-  datapath-mode: ipvlan
-  ipvlan-master-device: {{ .Values.ipvlan.masterDevice }}
-{{- end }}
-{{- end }}
-
   enable-xt-socket-fallback: {{ .Values.enableXTSocketFallback | quote }}
   install-iptables-rules: {{ .Values.installIptablesRules | quote }}
 {{- if or (.Values.azure.enabled) (.Values.eni.enabled) (.Values.gke.enabled) (ne .Values.cni.chainingMode "none") }}
@@ -486,16 +517,29 @@ data:
 {{- end }}
 
   auto-direct-node-routes: {{ .Values.autoDirectNodeRoutes | quote }}
+
+{{- if .Values.bandwidthManager }}
+{{- if typeIs "bool" .Values.bandwidthManager }}
+  # DEPRECATED: this block should be removed in 1.13
   enable-bandwidth-manager: {{ .Values.bandwidthManager | quote }}
+{{- else }}
+{{- if .Values.bandwidthManager.enabled }}
+  enable-bandwidth-manager: {{ .Values.bandwidthManager.enabled | quote }}
+  enable-bbr: {{ .Values.bandwidthManager.bbr | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
 
 {{- if hasKey .Values "localRedirectPolicy" }}
   enable-local-redirect-policy: {{ .Values.localRedirectPolicy | quote }}
 {{- end }}
 
-{{- if hasKey .Values "nativeRoutingCIDR" }}
-  ipv4-native-routing-cidr: {{ .Values.nativeRoutingCIDR }}
-{{- else if hasKey .Values "ipv4NativeRoutingCIDR" }}
+{{- if hasKey .Values "ipv4NativeRoutingCIDR" }}
   ipv4-native-routing-cidr: {{ .Values.ipv4NativeRoutingCIDR }}
+{{- end }}
+
+{{- if hasKey .Values "ipv6NativeRoutingCIDR" }}
+  ipv6-native-routing-cidr: {{ .Values.ipv6NativeRoutingCIDR }}
 {{- end }}
 
 {{- if hasKey .Values "fragmentTracking" }}
@@ -514,20 +558,28 @@ data:
   devices: {{ join " " .Values.devices | quote }}
 {{- end }}
 
-  kube-proxy-replacement:  {{ $kubeProxyReplacement | quote }}
+{{- if .Values.enableRuntimeDeviceDetection }}
+  enable-runtime-device-detection: "true"
+{{- end }}
+
+  kube-proxy-replacement: {{ $kubeProxyReplacement | quote }}
+
 {{- if ne $kubeProxyReplacement "disabled" }}
   kube-proxy-replacement-healthz-bind-address: {{ default "" .Values.kubeProxyReplacementHealthzBindAddr | quote}}
 {{- end }}
 
-{{- if hasKey .Values "hostServices" }}
-{{- if .Values.hostServices.enabled }}
-  enable-host-reachable-services: {{ .Values.hostServices.enabled | quote }}
+{{- if $socketLB }}
+{{- if hasKey $socketLB "enabled" }}
+  bpf-lb-sock: {{ $socketLB.enabled | quote }}
 {{- end }}
+{{- if hasKey $socketLB "hostNamespaceOnly" }}
+  bpf-lb-sock-hostns-only: {{ $socketLB.hostNamespaceOnly | quote }}
+{{- end }}
+{{- end }}
+
+{{- if hasKey .Values "hostServices" }}
 {{- if ne .Values.hostServices.protocols "tcp,udp" }}
   host-reachable-services-protos: {{ .Values.hostServices.protocols }}
-{{- end }}
-{{- if hasKey .Values.hostServices "hostNamespaceOnly" }}
-  bpf-lb-sock-hostns-only: {{ .Values.hostServices.hostNamespaceOnly | quote }}
 {{- end }}
 {{- end }}
 {{- if hasKey .Values "hostPort" }}
@@ -585,8 +637,6 @@ data:
 {{- end }}
 {{- if .Values.sessionAffinity }}
   enable-session-affinity: {{ .Values.sessionAffinity | quote }}
-{{- else if eq $defaultSessionAffinity "true" }}
-  enable-session-affinity: {{ $defaultSessionAffinity | quote }}
 {{- end }}
 {{- if .Values.svcSourceRangeCheck }}
   enable-svc-source-range-check: {{ .Values.svcSourceRangeCheck | quote }}
@@ -620,7 +670,7 @@ data:
   k8s-require-ipv6-pod-cidr: {{ .Values.k8s.requireIPv6PodCIDR | quote }}
 {{- end }}
 {{- if .Values.endpointStatus.enabled }}
-  endpoint-status: {{ required "endpointStatus.status required: policy, health, controllers, logs and / or state. For 2 or more options use a comma: \"policy, health\"" .Values.endpointStatus.status | quote }}
+  endpoint-status: {{ required "endpointStatus.status required: policy, health, controllers, log and / or state. For 2 or more options use a space: \"policy health\"" .Values.endpointStatus.status | quote }}
 {{- end }}
 {{- if and .Values.endpointRoutes .Values.endpointRoutes.enabled }}
   enable-endpoint-routes: {{ .Values.endpointRoutes.enabled | quote }}
@@ -666,7 +716,7 @@ data:
   # Enable Hubble gRPC service.
   enable-hubble: {{ .Values.hubble.enabled  | quote }}
   # UNIX domain socket for Hubble server to listen to.
-  hubble-socket-path:  {{ .Values.hubble.socketPath | quote }}
+  hubble-socket-path: {{ .Values.hubble.socketPath | quote }}
 {{- if hasKey .Values.hubble "eventQueueSize" }}
   # Buffer size of the channel for Hubble to receive monitor events. If this field is not set,
   # the buffer size is set to the default monitor queue size.
@@ -708,9 +758,13 @@ data:
   # A space separated list of iptables chains to disable when installing feeder rules.
   disable-iptables-feeder-rules: {{ .Values.disableIptablesFeederRules | join " " | quote }}
 {{- end }}
+{{- if .Values.aksbyocni.enabled }}
+  ipam: "cluster-pool"
+{{- else }}
   ipam: {{ $ipam | quote }}
+{{- end }}
 
-{{- if eq $ipam "cluster-pool" }}
+{{- if or (eq $ipam "cluster-pool") (eq $ipam "cluster-pool-v2beta") }}
 {{- if .Values.ipv4.enabled }}
   {{- if .Values.ipam.operator.clusterPoolIPv4PodCIDRList }}
   cluster-pool-ipv4-cidr: {{ .Values.ipam.operator.clusterPoolIPv4PodCIDRList | join " " | quote }}
@@ -737,6 +791,25 @@ data:
 
 {{- if .Values.egressGateway.enabled }}
   enable-ipv4-egress-gateway: "true"
+{{- end }}
+{{- if .Values.egressGateway.installRoutes }}
+  install-egress-gateway-routes: "true"
+{{- end }}
+
+{{- if hasKey .Values "vtep" }}
+  enable-vtep: {{ .Values.vtep.enabled | quote }}
+{{- if hasKey .Values.vtep "endpoint" }}
+  vtep-endpoint: {{ .Values.vtep.endpoint | quote }}
+{{- end }}
+{{- if hasKey .Values.vtep "cidr" }}
+  vtep-cidr: {{ .Values.vtep.cidr | quote }}
+{{- end }}
+{{- if hasKey .Values.vtep "mask" }}
+  vtep-mask: {{ .Values.vtep.mask | quote }}
+{{- end }}
+{{- if hasKey .Values.vtep "mac" }}
+  vtep-mac: {{ .Values.vtep.mac | quote }}
+{{- end }}
 {{- end }}
 
 {{- if .Values.enableK8sEventHandover }}
@@ -775,6 +848,20 @@ data:
   bgp-announce-pod-cidr: {{ .Values.bgp.announce.podCIDR | quote }}
 {{- end}}
 
+{{- if .Values.bgpControlPlane.enabled }}
+  enable-bgp-control-plane: "true"
+{{- else }}
+  enable-bgp-control-plane: "false"
+{{- end }}
+
+{{- if not .Values.securityContext.privileged }}
+  procfs: "/host/proc"
+{{- end }}
+
+{{- if hasKey .Values.bpf "root" }}
+  bpf-root: {{ .Values.bpf.root | quote }}
+{{- end }}
+
 {{- if hasKey .Values.cgroup "hostRoot" }}
   cgroup-root: {{ .Values.cgroup.hostRoot | quote }}
 {{- end }}
@@ -792,7 +879,64 @@ data:
   enable-k8s-terminating-endpoint: {{ .Values.enableK8sTerminatingEndpoint | quote }}
 {{- end }}
 
+{{- if hasKey .Values "dnsPolicyUnloadOnShutdown" }}
+  # Unload DNS policy rules on graceful shutdown
+  dns-policy-unload-on-shutdown: {{.Values.dnsPolicyUnloadOnShutdown | quote }}
+{{- end }}
+
+{{- if .Values.annotateK8sNode }}
+  annotate-k8s-node: "true"
+{{- end }}
+
+{{- if .Values.operator.removeNodeTaints }}
+  remove-cilium-node-taints: "true"
+{{- end }}
+{{- if .Values.operator.setNodeNetworkStatus }}
+  set-cilium-is-up-condition: "true"
+{{- end }}
+
+{{- if .Values.operator.unmanagedPodWatcher.restart }}
+  unmanaged-pod-watcher-interval: {{ .Values.operator.unmanagedPodWatcher.intervalSeconds | quote }}
+{{- else }}
+  unmanaged-pod-watcher-interval: "0"
+{{- end }}
+
+{{- if .Values.dnsProxy }}
+  {{- if .Values.dnsProxy.dnsRejectResponseCode }}
+  tofqdns-dns-reject-response-code: {{ .Values.dnsProxy.dnsRejectResponseCode | quote }}
+  {{- end }}
+  {{- if hasKey .Values.dnsProxy "enableDnsCompression" }}
+  tofqdns-enable-dns-compression: {{ .Values.dnsProxy.enableDnsCompression | quote }}
+  {{- end }}
+  {{- if .Values.dnsProxy.endpointMaxIpPerHostname }}
+  tofqdns-endpoint-max-ip-per-hostname: {{ .Values.dnsProxy.endpointMaxIpPerHostname | quote }}
+  {{- end }}
+  {{- if .Values.dnsProxy.idleConnectionGracePeriod }}
+  tofqdns-idle-connection-grace-period: {{ .Values.dnsProxy.idleConnectionGracePeriod | quote }}
+  {{- end }}
+  {{- if .Values.dnsProxy.maxDeferredConnectionDeletes }}
+  tofqdns-max-deferred-connection-deletes: {{ .Values.dnsProxy.maxDeferredConnectionDeletes | quote }}
+  {{- end }}
+  {{- if .Values.dnsProxy.minTtl }}
+  tofqdns-min-ttl: {{ .Values.dnsProxy.minTtl | quote }}
+  {{- end }}
+  {{- if .Values.dnsProxy.preCache }}
+  tofqdns-pre-cache: {{ .Values.dnsProxy.preCache | quote }}
+  {{- end }}
+  {{- if .Values.dnsProxy.proxyPort }}
+  tofqdns-proxy-port: {{ .Values.dnsProxy.proxyPort | quote }}
+  {{- end }}
+  {{- if .Values.dnsProxy.proxyResponseMaxDelay }}
+  tofqdns-proxy-response-max-delay: {{ .Values.dnsProxy.proxyResponseMaxDelay | quote }}
+  {{- end }}
+{{- end }}
+
 {{- if .Values.extraConfig }}
   {{ toYaml .Values.extraConfig | nindent 2 }}
 {{- end }}
+
+{{- if hasKey .Values "agentNotReadyTaintKey" }}
+  agent-not-ready-taint-key: {{ .Values.agentNotReadyTaintKey | quote }}
+{{- end }}
+
 {{- end }}
