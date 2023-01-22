@@ -307,7 +307,7 @@ bpf:
   lbExternalClusterIP: false
 
   # -- Enable native IP masquerade support in eBPF
-  masquerade: true
+  #masquerade: false
 
   # -- Deprecated in favor of bpf.hostLegacyRouting. To be removed in 1.13.
   # Configure whether direct routing mode should route traffic via
@@ -783,7 +783,7 @@ hubble:
 
   relay:
     # -- Enable Hubble Relay (requires hubble.enabled=true)
-    enabled: false
+    enabled: true
 
     # -- Roll out Hubble Relay pods automatically when configmap is updated.
     rollOutPods: false
