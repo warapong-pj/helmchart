@@ -17,4 +17,3 @@ rules:
   resourceNames:  [{{ template "loki.fullname" . }}]
 {{- end }}
 {{- end }}
-
