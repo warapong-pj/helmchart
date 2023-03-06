@@ -24,8 +24,7 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 1,
-  "iteration": 1662117895629,
+  "iteration": 1678080883658,
   "links": [],
   "liveNow": false,
   "panels": [
@@ -132,7 +131,7 @@
             "mode": "thresholds"
           },
           "mappings": [],
-          "noValue": "Nan",
+          "noValue": "NaN",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -264,6 +263,7 @@
             "mode": "thresholds"
           },
           "mappings": [],
+          "noValue": "NaN",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -629,7 +629,7 @@
       },
       {
         "current": {
-          "selected": false,
+          "selected": true,
           "text": "default",
           "value": "default"
         },
@@ -659,9 +659,13 @@
       },
       {
         "current": {
-          "selected": false,
-          "text": "php-apache",
-          "value": "php-apache"
+          "selected": true,
+          "text": [
+            "None"
+          ],
+          "value": [
+            ""
+          ]
         },
         "datasource": {
           "type": "prometheus",
@@ -697,6 +701,6 @@
   "timezone": "",
   "title": "Pod Resources",
   "uid": "1O2IY9qnz",
-  "version": 4,
+  "version": 1,
   "weekStart": ""
 }
