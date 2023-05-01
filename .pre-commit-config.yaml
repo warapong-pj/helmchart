@@ -10,10 +10,10 @@ repos:
     # exclude: ^charts/loki
   - id: check-added-large-files
     exclude: ^charts/chaos-mesh/crds
-# - repo: https://github.com/Yelp/detect-secrets
-#   rev: v1.4.0
-#   hooks:
-#   - id: detect-secrets
+- repo: https://github.com/Yelp/detect-secrets
+  rev: v1.4.0
+  hooks:
+  - id: detect-secrets
 - repo: https://github.com/gruntwork-io/pre-commit
   rev: v0.1.18 # Get the latest from: https://github.com/gruntwork-io/pre-commit/releases
   hooks:
