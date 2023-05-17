@@ -1040,24 +1040,29 @@ serverFiles:
             regex: Pending|Succeeded|Failed|Completed
             action: drop
 
+      - job_name: 'prometheus-jvm-exporter'
+        honor_labels: true
+        scrape_interval: 30s
+        metrics_path: /actuator/prometheus
+
+        kubernetes_sd_configs:
+          - role: endpoints
+
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_endpoint_port_name]
+            action: keep
+            regex: http-traffic
+
+
 # adds additional scrape configs to prometheus.yml
 # must be a string so you have to add a | after extraScrapeConfigs:
 # example adds prometheus-blackbox-exporter scrape config
-extraScrapeConfigs: ""
-  # - job_name: 'prometheus-blackbox-exporter'
-  #   metrics_path: /probe
-  #   params:
-  #     module: [http_2xx]
-  #   static_configs:
-  #     - targets:
-  #       - https://example.com
-  #   relabel_configs:
-  #     - source_labels: [__address__]
-  #       target_label: __param_target
-  #     - source_labels: [__param_target]
-  #       target_label: instance
-  #     - target_label: __address__
-  #       replacement: prometheus-blackbox-exporter:9115
+# extraScrapeConfigs: |
+#   - job_name: 'prometheus-jvm-exporter'
+#     scrape_interval: 30s
+#     metrics_path: /actuator/prometheus
+#     kubernetes_sd_configs:
+#     - role: endpoints
 
 # Adds option to add alert_relabel_configs to avoid duplicate alerts in alertmanager
 # useful in H/A prometheus with different external labels but the same alerts
